@@ -67,6 +67,7 @@ public class Client extends ConnectionWithStatus implements IStatefulObject {
     private static final Logger LOG = LoggerFactory.getLogger(Client.class);
     private static final String PREFIX = "Netty-Client-";
     private static final long NO_DELAY_MS = 0L;
+    private static final long MINIMUM_INITIAL_DELAY_MS = 30000L;
 
     private final StormBoundedExponentialBackoffRetry retryPolicy;
     private final ClientBootstrap bootstrap;
@@ -126,7 +127,7 @@ public class Client extends ConnectionWithStatus implements IStatefulObject {
 
     private final Object pendingMessageLock = new Object();
     private MessageBatch pendingMessage;
-    private Timeout pendingFlush;
+    private long nextBackgroundFlushEpoch = Long.MAX_VALUE;
 
     @SuppressWarnings("rawtypes")
     Client(Map stormConf, ChannelFactory factory, ScheduledExecutorService scheduler, String host, int port) {
@@ -149,7 +150,8 @@ public class Client extends ConnectionWithStatus implements IStatefulObject {
 
         // Dummy values to avoid null checks
         pendingMessage = new MessageBatch(messageBatchSize);
-        scheduler.scheduleWithFixedDelay(new Flush(), 10, 10, TimeUnit.MILLISECONDS);
+        long initialDelayMs = Math.min(MINIMUM_INITIAL_DELAY_MS, maxWaitMs * maxReconnectionAttempts);
+        scheduler.scheduleWithFixedDelay(new Flush(), initialDelayMs, 10, TimeUnit.MILLISECONDS);
     }
 
     private ClientBootstrap createClientBootstrap(ChannelFactory factory, int bufferSize) {
@@ -259,9 +261,8 @@ public class Client extends ConnectionWithStatus implements IStatefulObject {
             previous = pendingMessage;
             pendingMessage = replacement;
 
-            // We are flushing the pending messages, therefore we can cancel the current pending flush
-            // The cancel is idempotent
-            pendingFlush.cancel();
+            // We are flushing the pending messages, therefore we can delay the next background flush
+            nextBackgroundFlushEpoch = System.currentTimeMillis() + 10000; // TODO bring back config
         }
 
         // Collect messages into batches (to optimize network throughput)
@@ -292,6 +293,9 @@ public class Client extends ConnectionWithStatus implements IStatefulObject {
             batches = createBatches(pendingMessage, unfilled.getMsgs().iterator());
             // We have a MessageBatch that isn't full yet, so we will wait for more messages.
             pendingMessage = batches.unfilled;
+
+            // Delay the next background flush because we just saw that Netty's buffer was full
+            nextBackgroundFlushEpoch = System.currentTimeMillis() + 1000; // TODO config
         }
 
         // MessageBatches that were filled are immediately handed to Netty
@@ -483,6 +487,11 @@ public class Client extends ConnectionWithStatus implements IStatefulObject {
         @Override
         public void run() {
             try {
+                if(nextBackgroundFlushEpoch > System.currentTimeMillis()){
+                    // Not time for background flush yet
+                    return;
+                }
+
                 Channel channel = getConnectedChannel();
                 if (channel == null || !channel.isWritable()) {
                     // Connection not available or buffer is full, no point in flushing
