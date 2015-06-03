@@ -475,6 +475,11 @@ public class Client extends ConnectionWithStatus implements IStatefulObject {
         }
 
         final int numMessages = batch.size();
+
+        if(numMessages > messageBatchSize){
+            LOG.error("MessageBatch larger than configured batch size is being flushed! size:{}", numMessages);
+        }
+
         pendingMessages.getAndAdd(numMessages);
         LOG.debug("writing {} messages to channel {}", batch.size(), channel.toString());
         ChannelFuture future = channel.write(batch);
