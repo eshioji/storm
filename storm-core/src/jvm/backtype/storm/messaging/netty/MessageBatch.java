@@ -78,6 +78,10 @@ class MessageBatch {
         return encoded_length >= buffer_size;
     }
 
+    public int getEncodedLength(){
+        return encoded_length;
+    }
+
     /**
      * true if this batch doesn't have any messages 
      * @return

@@ -476,8 +476,8 @@ public class Client extends ConnectionWithStatus implements IStatefulObject {
 
         final int numMessages = batch.size();
 
-        if(numMessages > messageBatchSize){
-            LOG.error("MessageBatch larger than configured batch size is being flushed! size:{}", numMessages);
+        if(batch.getEncodedLength() > messageBatchSize){
+            LOG.error("MessageBatch larger than configured batch size is being flushed! size:{}", batch.getEncodedLength());
         }
 
         pendingMessages.getAndAdd(numMessages);
